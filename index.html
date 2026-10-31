@@ -468,6 +468,7 @@
   const BOARD_SCALE = BOARD_H / 345;     // the preview stage is 345px tall
   const MAX_MASK_BYTES = 64 * 1024;      // matches MAX_MASK in the firmware
   const EFFECT_IDS = { none: 0, scroll: 1, pulse: 2, blink: 3, flicker: 4 };
+  const HAS_EMOJI = /\p{Extended_Pictographic}/u;
   // Must match SERVICE_UUID / DESIGN_UUID in the firmware
   const BLE_SERVICE = "06b41699-9ac0-469f-a87d-74d46d59810d";
   const BLE_DESIGN = "028a4dd3-794a-4733-8434-288f26816d98";
@@ -486,9 +487,32 @@
     return ((n >> 19 & 0x1f) << 11) | ((n >> 10 & 0x3f) << 5) | (n >> 3 & 0x1f);
   }
 
-  // Render the text's shape; only font, weight, size and message change it
+  // Color runs for text with emoji: [count, RGB565 low, high], flattened onto the
+  // background. Most of the strip is one color, so this stays far smaller than raw pixels.
+  function colorRuns(px, width, y0, rows) {
+    const bg = parseInt(state.bgColor.slice(1), 16);
+    const out = [];
+    for (let y = 0; y < rows; y++) {
+      let run = 0, color = 0;
+      for (let x = 0; x < width; x++) {
+        const i = ((y + y0) * width + x) * 4, a = px[i + 3] / 255;
+        const mix = (c, shift) => Math.round(c * a + (bg >> shift & 255) * (1 - a));
+        const hex = (mix(px[i], 16) << 16 | mix(px[i + 1], 8) << 8 | mix(px[i + 2], 0)).toString(16).padStart(6, "0");
+        const c = rgb565("#" + hex);
+        if (run && (c !== color || run === 255)) { out.push(run, color & 255, color >> 8); run = 0; }
+        color = c;
+        run++;
+      }
+      out.push(run, color & 255, color >> 8);
+    }
+    return out.length > MAX_MASK_BYTES ? null : Uint8Array.from(out);
+  }
+
+  // Render the text's shape; font, weight, size and message change it, and so do
+  // the colors when it has emoji, since those are flattened into the image
   async function buildShape() {
-    const key = [state.font, state.weight, state.size, state.message].join("|");
+    const color = HAS_EMOJI.test(state.message);
+    const key = [state.font, state.weight, state.size, state.message, color && state.textColor, color && state.bgColor].join("|");
     if (shape && shape.key === key) return shape;
     const px = Math.max(1, Math.round(state.size * BOARD_SCALE));
     const font = `${state.weight} ${px}px "${state.font}", sans-serif`;
@@ -507,7 +531,7 @@
       ctx.canvas.width = width;
       ctx.canvas.height = BOARD_H;
       ctx.font = font;
-      ctx.fillStyle = "#fff";
+      ctx.fillStyle = color ? state.textColor : "#fff";
       ctx.fillText(state.message, inkLeft, baseline);
       const a = ctx.getImageData(0, 0, width, BOARD_H).data;
       // Crop to the rows that have ink so long text fits in the board's memory
@@ -517,18 +541,23 @@
       }
       if (y1 >= y0) {
         top = y0; rows = y1 - y0 + 1;
-        const stride = Math.ceil(width / 2);
-        if (stride * rows > MAX_MASK_BYTES) return null;
-        mask = new Uint8Array(stride * rows);
-        for (let y = 0; y < rows; y++) {
-          for (let x = 0; x < width; x++) {
-            const v = Math.round(a[((y + y0) * width + x) * 4 + 3] / 17);
-            mask[y * stride + (x >> 1)] |= x & 1 ? v : v << 4;
+        if (color) {
+          mask = colorRuns(a, width, y0, rows);
+          if (!mask) return null;
+        } else {
+          const stride = Math.ceil(width / 2);
+          if (stride * rows > MAX_MASK_BYTES) return null;
+          mask = new Uint8Array(stride * rows);
+          for (let y = 0; y < rows; y++) {
+            for (let x = 0; x < width; x++) {
+              const v = Math.round(a[((y + y0) * width + x) * 4 + 3] / 17);
+              mask[y * stride + (x >> 1)] |= x & 1 ? v : v << 4;
+            }
           }
         }
       }
     }
-    shape = { key, width: rows ? width : 0, rows, top, left: Math.round(12 * BOARD_SCALE) - inkLeft, mask };
+    shape = { key, color, width: rows ? width : 0, rows, top, left: Math.round(12 * BOARD_SCALE) - inkLeft, mask };
     return shape;
   }
 
@@ -541,7 +570,7 @@
     head.setUint16(8, rgb565(state.textColor), true);
     head.setUint16(10, rgb565(state.bgColor), true);
     head.setUint8(12, EFFECT_IDS[state.effect]);
-    head.setUint8(13, state.running ? 1 : 0);
+    head.setUint8(13, (state.running ? 1 : 0) | (s.color ? 2 : 0));
     head.setUint16(14, Math.round(EFFECT_SECONDS[state.effect] / state.speed * 1000) || 0, true);
     return new Uint8Array(head.buffer);
   }
@@ -590,25 +619,57 @@
     syncTimer = setTimeout(syncNow, 150);
   }
 
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  // Bluetooth calls can hang forever, so give each step a limit named after it
+  function within(ms, step, promise) {
+    return Promise.race([promise, wait(ms).then(() => { throw new Error(step); })]);
+  }
+
+  // The link often comes up before the board is ready to answer, so pause, and
+  // start over with a fresh link if a step stalls
+  async function openLink(device) {
+    let failedStep = "connect";
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        setStatus("Connecting…", false);
+        const server = await within(10000, "connect", device.gatt.connect());
+        setStatus("Finding display…", false);
+        await wait(600);
+        const service = await within(8000, "service", server.getPrimaryService(BLE_SERVICE));
+        designChar = await within(8000, "channel", service.getCharacteristic(BLE_DESIGN));
+        return true;
+      } catch (err) {
+        failedStep = err.message;
+        designChar = null;
+        device.gatt.disconnect();
+        await wait(1000);
+      }
+    }
+    setStatus(`Failed at ${failedStep}. Tap to retry`, false);
+    return false;
+  }
+
+  let connecting = false;
   $("connect").addEventListener("click", async () => {
-    if (designChar) return;
+    if (designChar || connecting) return;
     if (!navigator.bluetooth) { setStatus("Open in Bluefy to connect", false); return; }
+    connecting = true;
     try {
       const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [BLE_SERVICE] }] });
-      setStatus("Connecting…", false);
       device.addEventListener("gattserverdisconnected", () => {
+        if (connecting) return;  // openLink() is starting over
         designChar = null;
         sentShape = null;
         setStatus("Connect", false);
       });
-      const server = await device.gatt.connect();
-      const service = await server.getPrimaryService(BLE_SERVICE);
-      designChar = await service.getCharacteristic(BLE_DESIGN);
-      setStatus("Connected", true);
-      syncNow();
+      if (await openLink(device)) {
+        setStatus("Connected", true);
+        syncNow();
+      }
     } catch {
-      designChar = null;
-      setStatus("Connect", false);  // picker closed, or the board went away
+      setStatus("Connect", false);  // picker closed
+    } finally {
+      connecting = false;
     }
   });
 
