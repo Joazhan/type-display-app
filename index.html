@@ -46,15 +46,15 @@
     padding-bottom: max(36px, env(safe-area-inset-bottom));
   }
 
-  /* Top bar: "reset" sits 96px from the top, right-aligned */
+  /* Top bar: a slim row above the stage, clear of the status bar when full-screen */
   .topbar {
-    height: 119px;
+    height: calc(max(env(safe-area-inset-top), 8px) + 28px);
     flex-shrink: 0;
     position: relative;
   }
   .reset {
     position: absolute;
-    top: 92px;
+    bottom: 3px;
     right: 12px;
     padding: 4px;
     background: none;
@@ -67,7 +67,7 @@
   /* Bluetooth link to the LilyGO display, mirrors "reset" on the left */
   .connect {
     position: absolute;
-    top: 92px;
+    bottom: 3px;
     left: 12px;
     padding: 4px;
     background: none;
@@ -81,7 +81,7 @@
   /* Board battery, left of "reset", shown while connected */
   .battery {
     position: absolute;
-    top: 96px;
+    bottom: 7px;
     right: 60px;
     display: flex;
     align-items: center;
