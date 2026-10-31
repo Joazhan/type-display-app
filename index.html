@@ -78,6 +78,45 @@
     cursor: pointer;
   }
   .connect[data-state="live"] { color: var(--ink); }
+  /* Board battery, left of "reset", shown while connected */
+  .battery {
+    position: absolute;
+    top: 96px;
+    right: 60px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font: 300 10px/12px var(--sf);
+    text-transform: uppercase;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .battery[hidden] { display: none; }
+  .battery-icon {
+    position: relative;
+    width: 18px;
+    height: 9px;
+    padding: 1px;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+  }
+  .battery-icon::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    right: -3px;
+    width: 2px;
+    height: 3px;
+    background: currentColor;
+    border-radius: 0 1px 1px 0;
+  }
+  .battery-level {
+    display: block;
+    height: 100%;
+    background: currentColor;
+    border-radius: 0.5px;
+  }
+  .battery[data-low="true"] { color: #d70015; }
 
   /* Preview stage */
   .stage {
@@ -312,6 +351,10 @@
 <main class="app">
   <div class="topbar">
     <button class="connect" id="connect" type="button" aria-live="polite">Connect</button>
+    <div class="battery" id="battery" role="status" hidden>
+      <span class="battery-icon" aria-hidden="true"><span class="battery-level" id="batteryLevel"></span></span>
+      <span id="batteryText"></span>
+    </div>
     <button class="reset" id="reset" type="button">Reset</button>
   </div>
 
@@ -474,6 +517,8 @@
   // Must match SERVICE_UUID / DESIGN_UUID in the firmware
   const BLE_SERVICE = "06b41699-9ac0-469f-a87d-74d46d59810d";
   const BLE_DESIGN = "028a4dd3-794a-4733-8434-288f26816d98";
+  const BLE_BATTERY = "f629a3e6-d3cb-4037-8f49-67d8c2156060";
+  const LOW_BATTERY = 15;
   const PACKET = { begin: 0, data: 1, settings: 2 };
   const CHUNK = 180;                     // fits the smallest Bluetooth packet iPhones negotiate
   let designChar = null, syncTimer, syncing = false, syncAgain = false;
@@ -639,6 +684,26 @@
     syncTimer = setTimeout(syncNow, 150);
   }
 
+  // [percent, plugged in, minutes left low, high], from the board's battery gauge
+  function showBattery(view) {
+    const percent = view.getUint8(0), plugged = view.getUint8(1), minutes = view.getUint16(2, true);
+    const left = !plugged && minutes ? ` · ${Math.floor(minutes / 60)}h ${minutes % 60}m` : "";
+    $("batteryLevel").style.width = Math.min(percent, 100) + "%";
+    $("batteryText").textContent = `${percent}%${plugged ? " ⚡" : left}`;
+    $("battery").dataset.low = !plugged && percent <= LOW_BATTERY;
+    $("battery").hidden = false;
+  }
+
+  // Optional: boards on older firmware just don't show a battery
+  async function watchBattery(service) {
+    try {
+      const char = await within(5000, "battery", service.getCharacteristic(BLE_BATTERY));
+      char.addEventListener("characteristicvaluechanged", (e) => showBattery(e.target.value));
+      await within(5000, "battery", char.startNotifications());
+      showBattery(await within(5000, "battery", char.readValue()));
+    } catch {}
+  }
+
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   // Bluetooth calls can hang forever, so give each step a limit named after it
   function within(ms, step, promise) {
@@ -657,6 +722,7 @@
         await wait(600);
         const service = await within(8000, "service", server.getPrimaryService(BLE_SERVICE));
         designChar = await within(8000, "channel", service.getCharacteristic(BLE_DESIGN));
+        await watchBattery(service);
         return true;
       } catch (err) {
         failedStep = err.message;
@@ -680,6 +746,7 @@
         if (connecting) return;  // openLink() is starting over
         designChar = null;
         sentShape = null;
+        $("battery").hidden = true;
         setStatus("Connect", false);
       });
       if (await openLink(device)) {
