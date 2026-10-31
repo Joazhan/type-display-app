@@ -469,6 +469,8 @@
   const MAX_MASK_BYTES = 64 * 1024;      // matches MAX_MASK in the firmware
   const EFFECT_IDS = { none: 0, scroll: 1, pulse: 2, blink: 3, flicker: 4 };
   const HAS_EMOJI = /\p{Extended_Pictographic}/u;
+  const OVERSAMPLE = 4;                  // halved twice, see shrink()
+  const MAX_CANVAS_AREA = 16e6;          // iPhones refuse larger canvases
   // Must match SERVICE_UUID / DESIGN_UUID in the firmware
   const BLE_SERVICE = "06b41699-9ac0-469f-a87d-74d46d59810d";
   const BLE_DESIGN = "028a4dd3-794a-4733-8434-288f26816d98";
@@ -485,6 +487,20 @@
   function rgb565(hex) {
     const n = parseInt(hex.slice(1), 16);
     return ((n >> 19 & 0x1f) << 11) | ((n >> 10 & 0x3f) << 5) | (n >> 3 & 0x1f);
+  }
+
+  // Halve step by step: each pass averages every pixel, where one big jump skips some
+  function shrink(canvas) {
+    for (let scale = OVERSAMPLE; scale > 1; scale /= 2) {
+      const half = document.createElement("canvas");
+      half.width = canvas.width / 2;
+      half.height = canvas.height / 2;
+      const ctx = half.getContext("2d");
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(canvas, 0, 0, half.width, half.height);
+      canvas = half;
+    }
+    return canvas;
   }
 
   // Color runs for text with emoji: [count, RGB565 low, high], flattened onto the
@@ -514,26 +530,30 @@
     const color = HAS_EMOJI.test(state.message);
     const key = [state.font, state.weight, state.size, state.message, color && state.textColor, color && state.bgColor].join("|");
     if (shape && shape.key === key) return shape;
-    const px = Math.max(1, Math.round(state.size * BOARD_SCALE));
+    // Draw oversized and halve down: the board's few pixels need real edge smoothing,
+    // and small sizes of emoji bitmaps look rough when drawn directly
+    const px = Math.max(1, state.size * BOARD_SCALE) * OVERSAMPLE;
     const font = `${state.weight} ${px}px "${state.font}", sans-serif`;
     await document.fonts.load(font, state.message || " ");
-    const ctx = document.createElement("canvas").getContext("2d");
-    ctx.font = font;
-    const m = ctx.measureText(state.message);
-    const inkLeft = Math.ceil(Math.max(0, m.actualBoundingBoxLeft));
-    const width = Math.ceil(Math.max(m.width, inkLeft + m.actualBoundingBoxRight)) + inkLeft;
+    const big = document.createElement("canvas").getContext("2d");
+    big.font = font;
+    const m = big.measureText(state.message);
+    const toBoard = (n) => Math.ceil(n / OVERSAMPLE);
+    const inkLeft = toBoard(Math.max(0, m.actualBoundingBoxLeft));
+    const width = toBoard(Math.max(m.width, inkLeft * OVERSAMPLE + m.actualBoundingBoxRight)) + inkLeft;
+    if (width * OVERSAMPLE * BOARD_H * OVERSAMPLE > MAX_CANVAS_AREA) return null;
 
     // Lay the line out like the stage does: line box centered, 12px left padding
     const lineH = m.fontBoundingBoxAscent + m.fontBoundingBoxDescent;
-    const baseline = Math.round((BOARD_H - lineH) / 2 + m.fontBoundingBoxAscent);
+    const baseline = Math.round((BOARD_H * OVERSAMPLE - lineH) / 2 + m.fontBoundingBoxAscent);
     let rows = 0, top = 0, mask = new Uint8Array(0);
     if (width > 0) {
-      ctx.canvas.width = width;
-      ctx.canvas.height = BOARD_H;
-      ctx.font = font;
-      ctx.fillStyle = color ? state.textColor : "#fff";
-      ctx.fillText(state.message, inkLeft, baseline);
-      const a = ctx.getImageData(0, 0, width, BOARD_H).data;
+      big.canvas.width = width * OVERSAMPLE;
+      big.canvas.height = BOARD_H * OVERSAMPLE;
+      big.font = font;
+      big.fillStyle = color ? state.textColor : "#fff";
+      big.fillText(state.message, inkLeft * OVERSAMPLE, baseline);
+      const a = shrink(big.canvas).getContext("2d").getImageData(0, 0, width, BOARD_H).data;
       // Crop to the rows that have ink so long text fits in the board's memory
       let y0 = BOARD_H, y1 = -1;
       for (let y = 0; y < BOARD_H; y++) {
