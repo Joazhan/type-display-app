@@ -694,14 +694,21 @@
     $("battery").hidden = false;
   }
 
-  // Optional: boards on older firmware just don't show a battery
   async function watchBattery(service) {
+    let step = "find";
     try {
-      const char = await within(5000, "battery", service.getCharacteristic(BLE_BATTERY));
+      const char = await within(5000, "timeout", service.getCharacteristic(BLE_BATTERY));
+      step = "read";
+      showBattery(await within(5000, "timeout", char.readValue()));
+      step = "updates";
       char.addEventListener("characteristicvaluechanged", (e) => showBattery(e.target.value));
-      await within(5000, "battery", char.startNotifications());
-      showBattery(await within(5000, "battery", char.readValue()));
-    } catch {}
+      await within(5000, "timeout", char.startNotifications());
+    } catch (err) {
+      // Say what failed; a first read that worked stays on screen, just not live
+      if (step === "updates") return;
+      $("batteryText").textContent = `Battery ${step}: ${err.name === "Error" ? err.message : err.name}`;
+      $("battery").hidden = false;
+    }
   }
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
