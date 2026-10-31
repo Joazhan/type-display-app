@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#f3f3f3">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Type">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Type Display</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f3f3f3;
+    --ink: #171717;
+    --ink-on-dark: #ececec;
+    --muted: #969696;
+    --control: #f9f9f9;
+    --line: rgba(0, 0, 0, 0.1);
+    --sf: "Inter", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: var(--bg); }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font-family: var(--sf);
+    color: var(--ink);
+    display: flex;
+    justify-content: center;
+    height: 100dvh;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    overscroll-behavior: none;
+  }
+
+  .app {
+    width: 100%;
+    max-width: 430px;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: max(36px, env(safe-area-inset-bottom));
+  }
+
+  /* Top bar: "reset" sits 96px from the top, right-aligned */
+  .topbar {
+    height: 119px;
+    flex-shrink: 0;
+    position: relative;
+  }
+  .reset {
+    position: absolute;
+    top: 92px;
+    right: 12px;
+    padding: 4px;
+    background: none;
+    border: 0;
+    font: 300 10px/12px var(--sf);
+    text-transform: uppercase;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  /* Bluetooth link to the LilyGO display, mirrors "reset" on the left */
+  .connect {
+    position: absolute;
+    top: 92px;
+    left: 12px;
+    padding: 4px;
+    background: none;
+    border: 0;
+    font: 300 10px/12px var(--sf);
+    text-transform: uppercase;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .connect[data-state="live"] { color: var(--ink); }
+
+  /* Preview stage */
+  .stage {
+    height: 345px;
+    flex-shrink: 0;
+    background: #171717;
+    display: flex;
+    align-items: center;
+    padding: 16px 12px;
+    overflow: hidden;
+    position: relative;
+  }
+  .stage-text {
+    font-size: 80px;
+    line-height: normal;
+    white-space: nowrap;
+    color: #cacaca;
+    flex-shrink: 0;
+    will-change: transform, opacity;
+    min-width: 0.5ch;
+    outline: none;
+    cursor: text;
+    caret-color: currentColor;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  .stage-text:empty::before {
+    content: attr(data-placeholder);
+    opacity: 0.4;
+  }
+  /* While typing, let long text scroll so the caret stays in view */
+  .stage.editing {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .stage.editing::-webkit-scrollbar { display: none; }
+
+  /* Effects (run while Start is on); --duration is set from the effect speed */
+  .stage[data-effect="scroll"] { padding-left: 0; padding-right: 0; }
+  .stage[data-effect="scroll"] .stage-text { animation: marquee var(--duration) linear infinite; }
+  .stage[data-effect="pulse"] .stage-text { animation: pulse var(--duration) ease-in-out infinite; }
+  .stage[data-effect="blink"] .stage-text { animation: blink var(--duration) step-end infinite; }
+  .stage[data-effect="flicker"] .stage-text { animation: flicker var(--duration) linear infinite; }
+  @keyframes marquee {
+    from { transform: translateX(min(100vw, 430px)); }
+    to   { transform: translateX(-100%); }
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.2; }
+  }
+  @keyframes blink {
+    0%  { opacity: 1; }
+    50% { opacity: 0; }
+  }
+  @keyframes flicker {
+    0%, 18%, 22%, 25%, 53%, 57%, 100% { opacity: 1; }
+    20%, 24%, 55% { opacity: 0.15; }
+    70% { opacity: 0.85; }
+    72% { opacity: 0.3; }
+    74% { opacity: 1; }
+  }
+
+  /* Customization panel */
+  .panel {
+    flex: 1 1 0;
+    min-height: 0;
+    margin: 20px 0;
+    position: relative;
+  }
+  .controls {
+    height: 100%;
+    margin: 0 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .controls::-webkit-scrollbar { display: none; }
+
+  /* Always-visible scrollbar in the right gutter (mobile browsers hide native ones) */
+  .scrollbar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 8px;
+    width: 4px;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.06);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  .scrollbar.visible {
+    opacity: 1;
+    pointer-events: auto;
+    transition-duration: 0.1s;
+  }
+  .scrollbar[hidden] { display: none; }
+  .scrollbar-thumb {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.3);
+    touch-action: none;
+    cursor: grab;
+  }
+  /* Bigger invisible hit area so the thumb is easy to drag */
+  .scrollbar-thumb::after {
+    content: "";
+    position: absolute;
+    inset: -4px -8px;
+  }
+  .scrollbar-thumb.dragging { background: rgba(0, 0, 0, 0.5); cursor: grabbing; }
+  .group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .group-label {
+    font: 400 10px/12px var(--sf);
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .control {
+    width: 100%;
+    min-height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    padding: 8px 12px;
+    background: var(--control);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font: 400 12px/12px var(--sf);
+    color: var(--ink);
+    position: relative;
+  }
+  select.control {
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 36px;
+    line-height: normal;
+    text-transform: capitalize;
+    cursor: pointer;
+    background: var(--control) url("assets/icon-chevron-down.svg") right 12px center / 16px 16px no-repeat;
+  }
+  select.control:disabled { opacity: 0.5; cursor: default; }
+  .control:focus-within, select.control:focus { outline: none; border-color: rgba(0, 0, 0, 0.35); }
+
+  /* − 20px + stepper */
+  .step {
+    display: flex;
+    padding: 8px;
+    margin: -8px;
+    border: 0;
+    background: none;
+    cursor: pointer;
+  }
+  .step img { display: block; }
+  .step:disabled { opacity: 0.4; cursor: default; }
+
+  /* Color rows: swatch + hex, with a native color picker over the whole row */
+  .color-row { justify-content: flex-start; cursor: pointer; }
+  .swatch {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .color-row input[type="color"] {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+    border: 0;
+    padding: 0;
+  }
+
+  /* Effect chips */
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .chip {
+    padding: 8px 12px;
+    background: var(--control);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font: 400 12px/12px var(--sf);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .chip[aria-pressed="true"] {
+    background: var(--ink);
+    border-color: transparent;
+    color: var(--control);
+  }
+
+  .reset:focus-visible, .start:focus-visible, .chip:focus-visible, .step:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
+
+  /* Start button */
+  .start {
+    flex-shrink: 0;
+    margin: 0 20px;
+    padding: 16px 12px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--ink);
+    color: var(--ink-on-dark);
+    font: 400 16px/normal var(--sf);
+    cursor: pointer;
+  }
+  .start:active { transform: scale(0.99); }
+</style>
+</head>
+<body>
+<main class="app">
+  <div class="topbar">
+    <button class="connect" id="connect" type="button" aria-live="polite">Connect</button>
+    <button class="reset" id="reset" type="button">Reset</button>
+  </div>
+
+  <section class="stage" id="stage" aria-label="Preview">
+    <p class="stage-text" id="stageText" contenteditable="true" role="textbox" aria-label="Message"
+       data-placeholder="Text" spellcheck="false" autocorrect="off" autocapitalize="sentences"
+       inputmode="text" enterkeyhint="done">Text</p>
+  </section>
+
+  <div class="panel">
+  <div class="controls" id="controls">
+    <section class="group" aria-labelledby="lblType">
+      <h2 class="group-label" id="lblType">Typography</h2>
+      <select class="control" id="font" aria-label="Font"></select>
+      <select class="control" id="weight" aria-label="Weight"></select>
+      <div class="control" role="group" aria-label="Font size">
+        <button class="step" id="sizeDown" type="button" aria-label="Smaller"><img src="assets/icon-minus.svg" width="16" height="16" alt=""></button>
+        <span id="sizeValue" aria-live="polite"></span>
+        <button class="step" id="sizeUp" type="button" aria-label="Larger"><img src="assets/icon-plus.svg" width="16" height="16" alt=""></button>
+      </div>
+      <label class="control color-row">
+        <span class="swatch" id="textSwatch"></span>
+        <span id="textHex"></span>
+        <input type="color" id="textColor" aria-label="Text color">
+      </label>
+    </section>
+
+    <section class="group" aria-labelledby="lblBg">
+      <h2 class="group-label" id="lblBg">Background</h2>
+      <label class="control color-row">
+        <span class="swatch" id="bgSwatch"></span>
+        <span id="bgHex"></span>
+        <input type="color" id="bgColor" aria-label="Background color">
+      </label>
+    </section>
+
+    <section class="group" aria-labelledby="lblFx">
+      <h2 class="group-label" id="lblFx">Effects</h2>
+      <div class="chips" id="effects" role="group" aria-labelledby="lblFx">
+        <button class="chip" type="button" data-effect="none">None</button>
+        <button class="chip" type="button" data-effect="scroll">Scroll</button>
+        <button class="chip" type="button" data-effect="pulse">Pulse</button>
+        <button class="chip" type="button" data-effect="blink">Blink</button>
+        <button class="chip" type="button" data-effect="flicker">Flicker</button>
+      </div>
+    </section>
+
+    <section class="group" aria-labelledby="lblSpeed">
+      <h2 class="group-label" id="lblSpeed">Effects Speed</h2>
+      <select class="control" id="speed" aria-labelledby="lblSpeed"></select>
+    </section>
+  </div>
+  <div class="scrollbar" id="scrollbar" aria-hidden="true"><div class="scrollbar-thumb" id="scrollThumb"></div></div>
+  </div>
+
+  <button class="start" id="start" type="button">Start</button>
+</main>
+
+<script>
+  // Google Fonts catalog: family -> weights it ships with, grouped by category
+  const ALL = [100, 200, 300, 400, 500, 600, 700, 800, 900];
+  const FONTS = {
+    "Sans Serif": {
+      "Inter": ALL, "Roboto": ALL, "Open Sans": [300, 400, 500, 600, 700, 800],
+      "Montserrat": ALL, "Poppins": ALL, "Lato": [100, 300, 400, 700, 900],
+      "DM Sans": ALL, "Work Sans": ALL, "Manrope": [200, 300, 400, 500, 600, 700, 800],
+      "Outfit": ALL, "Nunito": [200, 300, 400, 500, 600, 700, 800, 900],
+      "Rubik": [300, 400, 500, 600, 700, 800, 900], "Space Grotesk": [300, 400, 500, 600, 700],
+    },
+    "Serif": {
+      "Playfair Display": [400, 500, 600, 700, 800, 900], "Merriweather": [300, 400, 700, 900],
+      "Lora": [400, 500, 600, 700], "EB Garamond": [400, 500, 600, 700, 800],
+      "Roboto Slab": ALL, "Fraunces": ALL, "DM Serif Display": [400],
+    },
+    "Display": {
+      "Bebas Neue": [400], "Anton": [400], "Oswald": [200, 300, 400, 500, 600, 700],
+      "Bricolage Grotesque": [200, 300, 400, 500, 600, 700, 800], "Abril Fatface": [400],
+      "Righteous": [400], "Lobster": [400], "Press Start 2P": [400],
+    },
+    "Handwriting": {
+      "Pacifico": [400], "Caveat": [400, 500, 600, 700], "Dancing Script": [400, 500, 600, 700],
+      "Permanent Marker": [400],
+    },
+    "Monospace": {
+      "Roboto Mono": [100, 200, 300, 400, 500, 600, 700], "JetBrains Mono": [100, 200, 300, 400, 500, 600, 700, 800],
+      "IBM Plex Mono": [100, 200, 300, 400, 500, 600, 700], "Space Mono": [400, 700],
+    },
+  };
+  const WEIGHTS = Object.assign({}, ...Object.values(FONTS));
+  const WEIGHT_NAMES = {
+    100: "Thin", 200: "Extra Light", 300: "Light", 400: "Regular", 500: "Medium",
+    600: "Semi Bold", 700: "Bold", 800: "Extra Bold", 900: "Black",
+  };
+  const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3];
+  // Base length of one effect cycle at 1.00x
+  const EFFECT_SECONDS = { scroll: 6, pulse: 1.6, blink: 1, flicker: 2 };
+  const SIZE_STEP = 4, SIZE_MIN = 12, SIZE_MAX = 240;
+
+  // Fetch a family's stylesheet from Google Fonts the first time it's picked
+  const loaded = new Set(["Inter"]);
+  function loadFont(family) {
+    if (loaded.has(family)) return;
+    loaded.add(family);
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = `https://fonts.googleapis.com/css2?family=${family.replace(/ /g, "+")}:wght@${WEIGHTS[family].join(";")}&display=swap`;
+    document.head.appendChild(link);
+  }
+
+  const DEFAULTS = {
+    font: "Inter", weight: "400", message: "Text", size: 80,
+    textColor: "#cacaca", bgColor: "#171717",
+    effect: "none", speed: 1, running: false,
+  };
+  let state = { ...DEFAULTS };
+
+  const $ = (id) => document.getElementById(id);
+  const stage = $("stage"), stageText = $("stageText");
+
+  function render() {
+    // Don't rewrite the text while the user is typing in it (would reset the caret)
+    if (document.activeElement !== stageText) stageText.textContent = state.message;
+    stageText.style.fontFamily = `"${state.font}", var(--sf)`;
+    stageText.style.fontWeight = state.weight;
+    stageText.style.fontSize = state.size + "px";
+    stageText.style.color = state.textColor;
+    stage.style.background = state.bgColor;
+
+    const active = state.running && state.effect !== "none";
+    stage.dataset.effect = active ? state.effect : "";
+    if (active) stage.style.setProperty("--duration", (EFFECT_SECONDS[state.effect] / state.speed).toFixed(2) + "s");
+    $("start").textContent = state.running ? "Stop" : "Start";
+
+    $("font").value = state.font;
+    $("weight").value = state.weight;
+    $("sizeValue").textContent = state.size + "px";
+    $("sizeDown").disabled = state.size <= SIZE_MIN;
+    $("sizeUp").disabled = state.size >= SIZE_MAX;
+    for (const [key, sw, hex, input] of [["textColor", "textSwatch", "textHex", "textColor"], ["bgColor", "bgSwatch", "bgHex", "bgColor"]]) {
+      $(sw).style.background = state[key];
+      $(hex).textContent = state[key].toUpperCase();
+      $(input).value = state[key];
+    }
+    document.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", c.dataset.effect === state.effect));
+    $("speed").value = String(state.speed);
+    queueSync();
+  }
+
+  // ---- Sync to the LilyGO display over Bluetooth ----
+  // Every change is rendered here in the real Google Font and sent to the board as a
+  // 4-bit alpha mask; the board blends it with the colors and plays the effect.
+  // Web Bluetooth needs Chrome on Android or the Bluefy browser on iPhone.
+  const BOARD_H = 170;
+  const BOARD_SCALE = BOARD_H / 345;     // the preview stage is 345px tall
+  const MAX_MASK_BYTES = 64 * 1024;      // matches MAX_MASK in the firmware
+  const EFFECT_IDS = { none: 0, scroll: 1, pulse: 2, blink: 3, flicker: 4 };
+  // Must match SERVICE_UUID / DESIGN_UUID in the firmware
+  const BLE_SERVICE = "06b41699-9ac0-469f-a87d-74d46d59810d";
+  const BLE_DESIGN = "028a4dd3-794a-4733-8434-288f26816d98";
+  const PACKET = { begin: 0, data: 1, settings: 2 };
+  const CHUNK = 180;                     // fits the smallest Bluetooth packet iPhones negotiate
+  let designChar = null, syncTimer, syncing = false, syncAgain = false;
+  let sentShape = null, shape = null;    // the mask on the board, and the last one built
+
+  function setStatus(text, live) {
+    const el = $("connect");
+    el.textContent = text;
+    el.dataset.state = live ? "live" : "";
+  }
+  function rgb565(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    return ((n >> 19 & 0x1f) << 11) | ((n >> 10 & 0x3f) << 5) | (n >> 3 & 0x1f);
+  }
+
+  // Render the text's shape; only font, weight, size and message change it
+  async function buildShape() {
+    const key = [state.font, state.weight, state.size, state.message].join("|");
+    if (shape && shape.key === key) return shape;
+    const px = Math.max(1, Math.round(state.size * BOARD_SCALE));
+    const font = `${state.weight} ${px}px "${state.font}", sans-serif`;
+    await document.fonts.load(font, state.message || " ");
+    const ctx = document.createElement("canvas").getContext("2d");
+    ctx.font = font;
+    const m = ctx.measureText(state.message);
+    const inkLeft = Math.ceil(Math.max(0, m.actualBoundingBoxLeft));
+    const width = Math.ceil(Math.max(m.width, inkLeft + m.actualBoundingBoxRight)) + inkLeft;
+
+    // Lay the line out like the stage does: line box centered, 12px left padding
+    const lineH = m.fontBoundingBoxAscent + m.fontBoundingBoxDescent;
+    const baseline = Math.round((BOARD_H - lineH) / 2 + m.fontBoundingBoxAscent);
+    let rows = 0, top = 0, mask = new Uint8Array(0);
+    if (width > 0) {
+      ctx.canvas.width = width;
+      ctx.canvas.height = BOARD_H;
+      ctx.font = font;
+      ctx.fillStyle = "#fff";
+      ctx.fillText(state.message, inkLeft, baseline);
+      const a = ctx.getImageData(0, 0, width, BOARD_H).data;
+      // Crop to the rows that have ink so long text fits in the board's memory
+      let y0 = BOARD_H, y1 = -1;
+      for (let y = 0; y < BOARD_H; y++) {
+        for (let x = 0; x < width; x++) if (a[(y * width + x) * 4 + 3]) { y0 = Math.min(y0, y); y1 = y; break; }
+      }
+      if (y1 >= y0) {
+        top = y0; rows = y1 - y0 + 1;
+        const stride = Math.ceil(width / 2);
+        if (stride * rows > MAX_MASK_BYTES) return null;
+        mask = new Uint8Array(stride * rows);
+        for (let y = 0; y < rows; y++) {
+          for (let x = 0; x < width; x++) {
+            const v = Math.round(a[((y + y0) * width + x) * 4 + 3] / 17);
+            mask[y * stride + (x >> 1)] |= x & 1 ? v : v << 4;
+          }
+        }
+      }
+    }
+    shape = { key, width: rows ? width : 0, rows, top, left: Math.round(12 * BOARD_SCALE) - inkLeft, mask };
+    return shape;
+  }
+
+  function header(s) {
+    const head = new DataView(new ArrayBuffer(16));
+    head.setUint16(0, s.width, true);
+    head.setUint16(2, s.rows, true);
+    head.setInt16(4, s.top, true);
+    head.setInt16(6, s.left, true);
+    head.setUint16(8, rgb565(state.textColor), true);
+    head.setUint16(10, rgb565(state.bgColor), true);
+    head.setUint8(12, EFFECT_IDS[state.effect]);
+    head.setUint8(13, state.running ? 1 : 0);
+    head.setUint16(14, Math.round(EFFECT_SECONDS[state.effect] / state.speed * 1000) || 0, true);
+    return new Uint8Array(head.buffer);
+  }
+
+  function packet(type, bytes) {
+    const p = new Uint8Array(1 + bytes.length);
+    p[0] = type;
+    p.set(bytes, 1);
+    return p;
+  }
+
+  async function syncNow() {
+    if (!designChar) return;
+    if (syncing) { syncAgain = true; return; }
+    syncing = true;
+    try {
+      const s = await buildShape();
+      if (!s) { setStatus("Too long for display", false); return; }
+      if (sentShape === s.key) {
+        // Only colors or the effect changed: a 17-byte update
+        await designChar.writeValueWithResponse(packet(PACKET.settings, header(s)));
+      } else {
+        const body = new Uint8Array(16 + s.mask.length);
+        body.set(header(s));
+        body.set(s.mask, 16);
+        const size = new Uint8Array(4);
+        new DataView(size.buffer).setUint32(0, body.length, true);
+        setStatus("Sending…", true);
+        await designChar.writeValueWithResponse(packet(PACKET.begin, size));
+        for (let i = 0; i < body.length; i += CHUNK - 1) {
+          await designChar.writeValueWithResponse(packet(PACKET.data, body.subarray(i, i + CHUNK - 1)));
+        }
+        sentShape = s.key;
+      }
+      setStatus("Connected", true);
+    } catch (err) {
+      if (designChar) setStatus("Send failed", false);
+    } finally {
+      syncing = false;
+      if (syncAgain) { syncAgain = false; syncNow(); }
+    }
+  }
+  function queueSync() {
+    if (!designChar) return;
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(syncNow, 150);
+  }
+
+  $("connect").addEventListener("click", async () => {
+    if (designChar) return;
+    if (!navigator.bluetooth) { setStatus("Open in Bluefy to connect", false); return; }
+    try {
+      const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [BLE_SERVICE] }] });
+      setStatus("Connecting…", false);
+      device.addEventListener("gattserverdisconnected", () => {
+        designChar = null;
+        sentShape = null;
+        setStatus("Connect", false);
+      });
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(BLE_SERVICE);
+      designChar = await service.getCharacteristic(BLE_DESIGN);
+      setStatus("Connected", true);
+      syncNow();
+    } catch {
+      designChar = null;
+      setStatus("Connect", false);  // picker closed, or the board went away
+    }
+  });
+
+  // Build the font list (grouped), the weight list for the current font, and speeds
+  for (const [group, families] of Object.entries(FONTS)) {
+    const og = document.createElement("optgroup");
+    og.label = group;
+    for (const family of Object.keys(families)) og.append(new Option(family, family));
+    $("font").append(og);
+  }
+  function fillWeights() {
+    const sel = $("weight");
+    sel.replaceChildren(...WEIGHTS[state.font].map((w) => new Option(WEIGHT_NAMES[w], String(w))));
+    sel.disabled = WEIGHTS[state.font].length === 1;
+  }
+  $("speed").append(...SPEEDS.map((s) => new Option(s.toFixed(2) + "x", String(s))));
+
+  $("font").addEventListener("change", (e) => {
+    state.font = e.target.value;
+    loadFont(state.font);
+    // Keep the closest weight this family actually has
+    const want = +state.weight;
+    state.weight = String(WEIGHTS[state.font].reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a)));
+    fillWeights();
+    render();
+  });
+  $("weight").addEventListener("change", (e) => { state.weight = e.target.value; render(); });
+  $("sizeDown").addEventListener("click", () => { state.size = Math.max(SIZE_MIN, state.size - SIZE_STEP); render(); });
+  $("sizeUp").addEventListener("click", () => { state.size = Math.min(SIZE_MAX, state.size + SIZE_STEP); render(); });
+  $("textColor").addEventListener("input", (e) => { state.textColor = e.target.value; render(); });
+  $("bgColor").addEventListener("input", (e) => { state.bgColor = e.target.value; render(); });
+  $("effects").addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (chip) { state.effect = chip.dataset.effect; render(); }
+  });
+  $("speed").addEventListener("change", (e) => { state.speed = +e.target.value; render(); });
+
+  // Tap the word (or anywhere on the stage) to type in place
+  function placeCaretAtEnd(el) {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+  stage.addEventListener("click", (e) => {
+    if (e.target !== stageText) { stageText.focus(); placeCaretAtEnd(stageText); }
+  });
+  stageText.addEventListener("focus", () => {
+    state.running = false;
+    stage.classList.add("editing");
+    render();
+  });
+  stageText.addEventListener("blur", () => {
+    stage.classList.remove("editing");
+    stage.scrollLeft = 0;
+    state.message = stageText.textContent.trim();
+    render();
+  });
+  stageText.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); stageText.blur(); }
+  });
+  stageText.addEventListener("input", () => {
+    // Keep it single-line plain text (pastes can bring line breaks)
+    if (/\n/.test(stageText.textContent)) stageText.textContent = stageText.textContent.replace(/\s*\n\s*/g, " ");
+    if (stageText.innerHTML === "<br>") stageText.textContent = "";
+    state.message = stageText.textContent;
+    render();
+  });
+  stageText.addEventListener("paste", (e) => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData("text").replace(/\s+/g, " ");
+    document.execCommand("insertText", false, text);
+  });
+
+  // Custom scrollbar for the controls panel
+  const controls = $("controls"), track = $("scrollbar"), thumb = $("scrollThumb");
+  function syncScrollbar() {
+    const { scrollTop, scrollHeight, clientHeight } = controls;
+    track.hidden = scrollHeight <= clientHeight + 1;
+    if (track.hidden) return;
+    const trackH = track.clientHeight;
+    const thumbH = Math.max(24, (clientHeight / scrollHeight) * trackH);
+    thumb.style.height = thumbH + "px";
+    thumb.style.top = (scrollTop / (scrollHeight - clientHeight)) * (trackH - thumbH) + "px";
+  }
+  // Show the scrollbar while scrolling (or dragging it), fade it out once scrolling stops
+  let hideTimer, dragging = false;
+  function showScrollbar() {
+    track.classList.add("visible");
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => { if (!dragging) track.classList.remove("visible"); }, 800);
+  }
+  controls.addEventListener("scroll", () => { syncScrollbar(); showScrollbar(); }, { passive: true });
+  new ResizeObserver(syncScrollbar).observe(controls);
+  thumb.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    thumb.setPointerCapture(e.pointerId);
+    thumb.classList.add("dragging");
+    dragging = true;
+    const startY = e.clientY, startTop = controls.scrollTop;
+    const ratio = (controls.scrollHeight - controls.clientHeight) / (track.clientHeight - thumb.offsetHeight);
+    const move = (ev) => { controls.scrollTop = startTop + (ev.clientY - startY) * ratio; };
+    const end = () => {
+      thumb.classList.remove("dragging");
+      dragging = false;
+      showScrollbar();
+      thumb.removeEventListener("pointermove", move);
+      thumb.removeEventListener("pointerup", end);
+      thumb.removeEventListener("pointercancel", end);
+    };
+    thumb.addEventListener("pointermove", move);
+    thumb.addEventListener("pointerup", end);
+    thumb.addEventListener("pointercancel", end);
+  });
+  // Tapping the track jumps the panel to that spot
+  track.addEventListener("pointerdown", (e) => {
+    if (e.target !== track) return;
+    const rect = track.getBoundingClientRect();
+    controls.scrollTop = ((e.clientY - rect.top) / rect.height) * (controls.scrollHeight - controls.clientHeight);
+  });
+
+  $("start").addEventListener("click", () => { state.running = !state.running; render(); });
+  $("reset").addEventListener("click", () => { state = { ...DEFAULTS }; fillWeights(); render(); });
+
+  fillWeights();
+  render();
+</script>
+</body>
+</html>

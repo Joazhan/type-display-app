@@ -1,0 +1,9 @@
+{
+  "name": "Type Display",
+  "short_name": "Type",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f3f3",
+  "theme_color": "#f3f3f3"
+}
