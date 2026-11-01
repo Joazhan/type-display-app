@@ -91,7 +91,7 @@
     font-variant-numeric: tabular-nums;
     color: var(--ink);
   }
-  .battery[hidden] { display: none; }
+  .battery[hidden], .group[hidden] { display: none; }
   .battery-icon {
     position: relative;
     width: 18px;
@@ -366,6 +366,14 @@
 
   <div class="panel">
   <div class="controls" id="controls">
+    <section class="group" id="powerGroup" aria-labelledby="lblPower" hidden>
+      <h2 class="group-label" id="lblPower">Display</h2>
+      <div class="chips" id="power" role="group" aria-labelledby="lblPower">
+        <button class="chip" type="button" data-power="on">On</button>
+        <button class="chip" type="button" data-power="off">Off</button>
+      </div>
+    </section>
+
     <section class="group" aria-labelledby="lblType">
       <h2 class="group-label" id="lblType">Typography</h2>
       <select class="control" id="font" aria-label="Font"></select>
@@ -498,7 +506,7 @@
       $(hex).textContent = state[key].toUpperCase();
       $(input).value = state[key];
     }
-    document.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", c.dataset.effect === state.effect));
+    document.querySelectorAll("#effects .chip").forEach((c) => c.setAttribute("aria-pressed", c.dataset.effect === state.effect));
     $("speed").value = String(state.speed);
     queueSync();
   }
@@ -519,10 +527,11 @@
   const BLE_DESIGN = "028a4dd3-794a-4733-8434-288f26816d98";
   const BLE_BATTERY = "f629a3e6-d3cb-4037-8f49-67d8c2156060";
   const LOW_BATTERY = 15;
-  const PACKET = { begin: 0, data: 1, settings: 2 };
+  const PACKET = { begin: 0, data: 1, settings: 2, power: 3 };
   const CHUNK = 180;                     // fits the smallest Bluetooth packet iPhones negotiate
   let designChar = null, syncTimer, syncing = false, syncAgain = false;
   let sentShape = null, shape = null;    // the mask on the board, and the last one built
+  let screenOn = true, sentPower = null; // kept apart from state so Reset leaves the screen alone
 
   function setStatus(text, live) {
     const el = $("connect");
@@ -652,6 +661,10 @@
     if (syncing) { syncAgain = true; return; }
     syncing = true;
     try {
+      if (sentPower !== screenOn) {
+        await designChar.writeValueWithResponse(packet(PACKET.power, [screenOn ? 1 : 0]));
+        sentPower = screenOn;
+      }
       const s = await buildShape();
       if (!s) { setStatus("Too long for display", false); return; }
       if (sentShape === s.key) {
@@ -743,6 +756,18 @@
   }
 
   let connecting = false;
+  function renderPower() {
+    document.querySelectorAll("#power .chip").forEach((c) => c.setAttribute("aria-pressed", (c.dataset.power === "on") === screenOn));
+  }
+  $("power").addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    screenOn = chip.dataset.power === "on";
+    renderPower();
+    queueSync();
+  });
+  renderPower();
+
   $("connect").addEventListener("click", async () => {
     if (designChar || connecting) return;
     if (!navigator.bluetooth) { setStatus("Open in Bluefy to connect", false); return; }
@@ -753,10 +778,13 @@
         if (connecting) return;  // openLink() is starting over
         designChar = null;
         sentShape = null;
+        sentPower = null;
         $("battery").hidden = true;
+        $("powerGroup").hidden = true;
         setStatus("Connect", false);
       });
       if (await openLink(device)) {
+        $("powerGroup").hidden = false;
         setStatus("Connected", true);
         syncNow();
       }
