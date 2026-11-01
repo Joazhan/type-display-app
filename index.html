@@ -701,7 +701,7 @@
     const percent = view.getUint8(0), plugged = view.getUint8(1), minutes = view.getUint16(2, true);
     const left = !plugged && minutes ? ` · ${Math.floor(minutes / 60)}h ${minutes % 60}m` : "";
     $("batteryLevel").style.width = Math.min(percent, 100) + "%";
-    $("batteryText").textContent = `${percent}%${plugged ? " ⚡" : left}`;
+    $("batteryText").textContent = `${percent}%${left}`;
     $("battery").dataset.low = !plugged && percent <= LOW_BATTERY;
   }
   function clearBattery() {
