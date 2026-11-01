@@ -78,7 +78,7 @@
     cursor: pointer;
   }
   .connect[data-state="live"] { color: var(--ink); }
-  /* Board battery, left of "reset", shown while connected */
+  /* Board battery, left of "reset"; reads --% until connected */
   .battery {
     position: absolute;
     bottom: 7px;
@@ -91,7 +91,6 @@
     font-variant-numeric: tabular-nums;
     color: var(--ink);
   }
-  .battery[hidden], .group[hidden] { display: none; }
   .battery-icon {
     position: relative;
     width: 18px;
@@ -351,9 +350,9 @@
 <main class="app">
   <div class="topbar">
     <button class="connect" id="connect" type="button" aria-live="polite">Connect</button>
-    <div class="battery" id="battery" role="status" hidden>
+    <div class="battery" id="battery" role="status">
       <span class="battery-icon" aria-hidden="true"><span class="battery-level" id="batteryLevel"></span></span>
-      <span id="batteryText"></span>
+      <span id="batteryText">--%</span>
     </div>
     <button class="reset" id="reset" type="button">Reset</button>
   </div>
@@ -366,7 +365,7 @@
 
   <div class="panel">
   <div class="controls" id="controls">
-    <section class="group" id="powerGroup" aria-labelledby="lblPower" hidden>
+    <section class="group" aria-labelledby="lblPower">
       <h2 class="group-label" id="lblPower">Display</h2>
       <div class="chips" id="power" role="group" aria-labelledby="lblPower">
         <button class="chip" type="button" data-power="on">On</button>
@@ -704,7 +703,11 @@
     $("batteryLevel").style.width = Math.min(percent, 100) + "%";
     $("batteryText").textContent = `${percent}%${plugged ? " ⚡" : left}`;
     $("battery").dataset.low = !plugged && percent <= LOW_BATTERY;
-    $("battery").hidden = false;
+  }
+  function clearBattery() {
+    $("batteryLevel").style.width = "0";
+    $("batteryText").textContent = "--%";
+    $("battery").dataset.low = false;
   }
 
   async function watchBattery(service) {
@@ -720,7 +723,6 @@
       // Say what failed; a first read that worked stays on screen, just not live
       if (step === "updates") return;
       $("batteryText").textContent = `Battery ${step}: ${err.name === "Error" ? err.message : err.name}`;
-      $("battery").hidden = false;
     }
   }
 
@@ -779,12 +781,10 @@
         designChar = null;
         sentShape = null;
         sentPower = null;
-        $("battery").hidden = true;
-        $("powerGroup").hidden = true;
+        clearBattery();
         setStatus("Connect", false);
       });
       if (await openLink(device)) {
-        $("powerGroup").hidden = false;
         setStatus("Connected", true);
         syncNow();
       }
